@@ -25,9 +25,13 @@ defmodule WebSocket do
     headers = parse_headers(socket)
     IO.inspect(headers)
 
-    headers_list = Map.to_list(headers)
-    res = validate_headers(headers_list)
+    res = validate_headers(headers)
     IO.inspect(res)
+
+    key = Map.get(headers, "sec-websocket-key")
+    accept_key = generate_accept_key(key)
+
+    send_response(socket, accept_key)
 
     serve(socket)
   end
@@ -51,30 +55,41 @@ defmodule WebSocket do
 
       header ->
         [name, value] = String.split(header, ":", parts: 2)
-        value = value |> String.trim_leading() |> String.downcase()
+        value = value |> String.trim_leading()
         name = name |> String.downcase()
         parse_headers(socket, Map.put(headers, name, value))
     end
   end
 
-  defp validate_headers([header | rest]) do
-    valid? =
-      case header do
-        {"connection", value} -> if value == "upgrade", do: true, else: false
-        {"sec-websocket-version", value} -> if value == "13", do: true, else: false
-        {"upgrade", value} -> if value == "websocket", do: true, else: false
-        {"sec-websocket-key", _} -> true
-        _ -> true
-      end
-
-    if valid? do
-      validate_headers(rest)
-    else
-      :invalid
-    end
+  defp validate_headers(%{
+         "upgrade" => "websocket",
+         "connection" => "Upgrade",
+         "sec-websocket-key" => _,
+         "sec-websocket-version" => "13"
+       }) do
+    :ok
   end
 
-  defp validate_headers([]) do
-    :ok
+  defp validate_headers(_) do
+    {:error, :invalid_headers}
+  end
+
+  defp generate_accept_key(key) do
+    Base.encode64(:crypto.hash(:sha, key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+  end
+
+  defp send_response(socket, accept_key) do
+    response =
+      "HTTP/1.1 101 Switching Protocols\r\n" <>
+        "Upgrade: websocket\r\n" <>
+        "Connection: Upgrade\r\n" <>
+        "Sec-WebSocket-Accept: " <> accept_key <> "\r\n\r\n"
+
+    IO.inspect(response)
+
+    :gen_tcp.send(
+      socket,
+      response
+    )
   end
 end
