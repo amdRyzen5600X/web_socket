@@ -21,7 +21,7 @@ defmodule WebSocket.Listener do
   def handle_info(:accept, state = %{listen_socket: listen_socket}) do
     case :gen_tcp.accept(listen_socket, 1000) do
       {:ok, client_socket} ->
-        {:ok, conn_pid} = WebSocket.Connection.start_link(client_socket)
+        {:ok, conn_pid} = WebSocket.Connection.start(client_socket)
         :gen_tcp.controlling_process(client_socket, conn_pid)
         send(self(), :accept)
         {:noreply, state}
