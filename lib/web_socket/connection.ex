@@ -62,19 +62,19 @@ defmodule WebSocket.Connection do
     {:stop, {:error, reason}, state}
   end
 
-  defp handle_frame(%{opcode: :ping, payload: payload}, socket) do
+  defp handle_frame(%{opcode: :ping, data: payload}, socket) do
     :gen_tcp.send(socket, WebSocket.Frame.encode(:pong, payload))
   end
 
-  defp handle_frame(%{opcode: :close, code: code, reason: reason}, socket) do
+  defp handle_frame(%{opcode: :close, code: code, data: reason}, socket) do
     send_close(socket, code, reason)
   end
 
-  defp handle_frame(%{opcode: :text, payload: payload}, _socket) do
+  defp handle_frame(%{opcode: :text, data: payload}, _socket) do
     IO.puts("Received: #{payload}")
   end
 
-  defp handle_frame(%{opcode: :binary, payload: payload}, _socket) do
+  defp handle_frame(%{opcode: :binary, data: payload}, _socket) do
     IO.puts("Received binary: #{byte_size(payload)} bytes")
   end
 
