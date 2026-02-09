@@ -18,11 +18,11 @@ defmodule WebSocket.Connection do
             :gen_tcp.send(socket, response)
             :inet.setopts(socket, active: :once)
             {:noreply, %{state | state: :open, buffer: rest}}
+
           {:error, reason, response} ->
             :gen_tcp.send(socket, response)
             :gen_tcp.close(socket)
             {:stop, reason, state}
-
         end
 
       {:more, new_buffer} ->
@@ -79,7 +79,7 @@ defmodule WebSocket.Connection do
   end
 
   defp send_close(socket, code, reason) do
-    :gen_tcp.send(socket, WebSocket.Frame.encode(:close, code, reason))
+    :gen_tcp.send(socket, WebSocket.Frame.encode(:close, {code, reason}))
     :gen_tcp.close(socket)
   end
 end

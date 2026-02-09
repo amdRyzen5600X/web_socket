@@ -140,4 +140,12 @@ defmodule WebSocket.Frame do
   defp unmask_binary(<<>>, _, _, acc) do
     :erlang.iolist_to_binary(Enum.reverse(acc))
   end
+
+  def encode(:pong, payload) when byte_size(payload) <= 125 do
+    <<1::1, 0::3, 10::4, 0::1, byte_size(payload)::7, payload::binary>>
+  end
+
+  def encode(:close, {code, payload}) when byte_size(payload) <= 123 do
+    <<1::1, 0::3, 8::4, 0::1, byte_size(payload) + 2::7, code::2, payload::binary>>
+  end
 end
