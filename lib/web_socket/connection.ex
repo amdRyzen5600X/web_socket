@@ -70,12 +70,8 @@ defmodule WebSocket.Connection do
     send_close(socket, code, reason)
   end
 
-  defp handle_frame(%{opcode: :text, data: payload}, _socket) do
+  defp handle_frame(%{opcode: opcode, data: payload}, _socket) when opcode in [:text, :binary] do
     IO.puts("Received: #{payload}")
-  end
-
-  defp handle_frame(%{opcode: :binary, data: payload}, _socket) do
-    IO.puts("Received binary: #{byte_size(payload)} bytes")
   end
 
   defp send_close(socket, code, reason) do

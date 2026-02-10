@@ -1,13 +1,17 @@
 defmodule WebSocket.Frame do
   alias WebSocket.Frame
 
-  @opcode_variants [
-    0,
-    1,
-    2,
-    8,
-    9,
-    10
+  @frame_max_size 2 ** 64
+
+  @opcode_variants [0, 1, 2, 8, 9, 10]
+
+  @opcode_variants_atoms [
+    :continuation,
+    :text,
+    :binary,
+    :close,
+    :ping,
+    :pong
   ]
 
   @opcode %{
@@ -36,16 +40,18 @@ defmodule WebSocket.Frame do
   defp parse_frame(input, frames) when byte_size(input) >= 2 do
     case do_parse_frame(input, frames) do
       {:incomplete, _} -> {:more, input}
+      {:error, _} when frames != [] -> {:ok, Enum.reverse(frames), input}
+      {:error, reason} -> {:error, reason}
       result -> result
     end
   end
 
-  defp parse_frame(_, frames) when frames != [] do
-    {:ok, Enum.reverse(frames), <<>>}
+  defp parse_frame(input, frames) when frames != [] do
+    {:ok, Enum.reverse(frames), input}
   end
 
-  defp parse_frame(_, _) do
-    :more
+  defp parse_frame(input, _) do
+    {:more, input}
   end
 
   defp do_parse_frame(
@@ -68,9 +74,12 @@ defmodule WebSocket.Frame do
 
               {code, unmasked_payload} =
                 case opcode do
-                  :close ->
+                  :close when byte_size(unmasked_payload) >= 2 ->
                     <<code::16, unmasked_payload::binary>> = unmasked_payload
                     {code, unmasked_payload}
+
+                  :close ->
+                    {nil, unmasked_payload}
 
                   _ ->
                     {nil, unmasked_payload}
@@ -88,11 +97,7 @@ defmodule WebSocket.Frame do
 
               frames = [frame | frames]
 
-              if fin == 0 do
-                do_parse_frame(rest, frames)
-              else
-                {:ok, Enum.reverse(frames), rest}
-              end
+              parse_frame(rest, frames)
             end
 
           :incomplete ->
@@ -112,7 +117,7 @@ defmodule WebSocket.Frame do
     {:error, :invalid_opcode}
   end
 
-  defp do_parse_frame(_, _) do
+  defp do_parse_frame(input, _) do
     {:error, :use_of_reserved}
   end
 
@@ -141,11 +146,60 @@ defmodule WebSocket.Frame do
     :erlang.iolist_to_binary(Enum.reverse(acc))
   end
 
-  def encode(:pong, payload) when byte_size(payload) <= 125 do
-    <<1::1, 0::3, 10::4, 0::1, byte_size(payload)::7, payload::binary>>
+  def encode(:close = opcode, {code, payload}) when byte_size(payload) <= 125 - 2 do
+    [encode_header(opcode), <<byte_size(payload) + 2::7, code::16, payload::binary>>]
+    |> :erlang.list_to_bitstring()
   end
 
-  def encode(:close, {code, payload}) when byte_size(payload) <= 123 do
-    <<1::1, 0::3, 8::4, 0::1, byte_size(payload) + 2::7, code::2, payload::binary>>
+  def encode(opcode, payload)
+      when byte_size(payload) <= 125 and opcode in @opcode_variants_atoms do
+    [encode_header(opcode), <<byte_size(payload)::7, payload::binary>>]
+    |> :erlang.list_to_bitstring()
+  end
+
+  def encode(:close = opcode, {code, payload}) when byte_size(payload) <= 65535 - 2 do
+    [encode_header(opcode), <<126::7, byte_size(payload) + 2::16, code::16, payload::binary>>]
+    |> :erlang.list_to_bitstring()
+  end
+
+  def encode(opcode, payload)
+      when byte_size(payload) <= 65535 and opcode in @opcode_variants_atoms do
+    [encode_header(opcode), <<126::7, byte_size(payload)::16, payload::binary>>]
+    |> :erlang.list_to_bitstring()
+  end
+
+  def encode(:close = opcode, {code, payload}) when byte_size(payload) <= @frame_max_size - 3 do
+    [encode_header(opcode), <<127::7, byte_size(payload) + 2::64, code::16, payload::binary>>]
+    |> :erlang.list_to_bitstring()
+  end
+
+  def encode(opcode, payload)
+      when byte_size(payload) <= @frame_max_size - 1 and opcode in @opcode_variants_atoms do
+    [encode_header(opcode), <<127::7, byte_size(payload)::64, payload::binary>>]
+    |> :erlang.list_to_bitstring()
+  end
+
+  defp encode_header(:pong) do
+    <<1::1, 0::3, 10::4, 0::1>>
+  end
+
+  defp encode_header(:ping) do
+    <<1::1, 0::3, 9::4, 0::1>>
+  end
+
+  defp encode_header(:close) do
+    <<1::1, 0::3, 8::4, 0::1>>
+  end
+
+  defp encode_header(:binary) do
+    <<1::1, 0::3, 2::4, 0::1>>
+  end
+
+  defp encode_header(:text) do
+    <<1::1, 0::3, 1::4, 0::1>>
+  end
+
+  defp encode_header(:continuation) do
+    <<1::1, 0::3, 0::4, 0::1>>
   end
 end

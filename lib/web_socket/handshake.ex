@@ -40,8 +40,11 @@ defmodule WebSocket.Handshake do
       ["/" <> _] ->
         :more
 
-      [_] ->
+      [_, _] ->
         {:error, :invalid_path}
+
+      [_] ->
+        :more
     end
   end
 
@@ -65,15 +68,15 @@ defmodule WebSocket.Handshake do
 
       [header, rest] when rest != [] ->
         case parse_header(header) do
-          {:ok, key, value} ->
+          {:ok, key, values} ->
             {_, handshake} =
               handshake
               |> Map.get_and_update(key, fn v ->
                 new =
                   if v != nil do
-                    List.insert_at(v, -1, value)
+                    v ++ values
                   else
-                    [value]
+                    values
                   end
 
                 {v, new}
@@ -84,6 +87,12 @@ defmodule WebSocket.Handshake do
           {:error, reason} ->
             {:error, reason}
         end
+
+      [_header] ->
+        :more
+
+      [] ->
+        :more
     end
   end
 
@@ -91,7 +100,7 @@ defmodule WebSocket.Handshake do
     case String.split(header_line, ":", parts: 2) do
       [key, value] ->
         key = String.downcase(key)
-        value = String.trim(value)
+        value = String.trim(value) |> String.split(",") |> Enum.map(&String.trim/1)
         {:ok, key, value}
 
       _ ->
@@ -180,7 +189,7 @@ defmodule WebSocket.Handshake do
   end
 
   defp validate(_) do
-    {:error, :invalid_header_not_enouth}
+    {:error, :invalid_header_not_enough}
   end
 
   defp validation_accept(
@@ -195,7 +204,7 @@ defmodule WebSocket.Handshake do
   end
 
   defp validation_accept(_) do
-    {:error, :invalid_header_not_enouth}
+    {:error, :invalid_header_not_enough}
   end
 
   defp accept(handshake) do
