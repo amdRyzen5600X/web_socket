@@ -117,7 +117,7 @@ defmodule WebSocket.Frame do
     {:error, :invalid_opcode}
   end
 
-  defp do_parse_frame(input, _) do
+  defp do_parse_frame(_, _) do
     {:error, :use_of_reserved}
   end
 

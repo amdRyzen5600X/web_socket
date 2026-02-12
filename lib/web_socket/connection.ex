@@ -40,7 +40,8 @@ defmodule WebSocket.Connection do
   def handle_info({:tcp, socket, data}, %{state: :open, buffer: buffer} = state) do
     case WebSocket.Frame.parse(data, buffer) do
       {:ok, frames, rest} ->
-        Enum.each(frames, &handle_frame(&1, socket))
+        Enum.reduce_while(frames, [], &handle_frame(&1, &2, socket))
+
         :inet.setopts(socket, active: :once)
         {:noreply, %{state | buffer: rest}}
 
@@ -49,7 +50,8 @@ defmodule WebSocket.Connection do
         {:noreply, %{state | buffer: new_buffer}}
 
       {:error, reason} ->
-        send_close(socket, 1002, "Protocol error")
+        :gen_tcp.send(socket, WebSocket.Frame.encode(:close, {1002, "Protocol error"}))
+        :gen_tcp.close(socket)
         {:stop, reason, state}
     end
   end
@@ -62,20 +64,39 @@ defmodule WebSocket.Connection do
     {:stop, {:error, reason}, state}
   end
 
-  defp handle_frame(%{opcode: :ping, data: payload}, socket) do
-    :gen_tcp.send(socket, WebSocket.Frame.encode(:pong, payload))
+  defp handle_frame(%{opcode: :ping, data: data}, acc, socket) do
+    :gen_tcp.send(socket, WebSocket.Frame.encode(:pong, data))
+    {:cont, acc}
   end
 
-  defp handle_frame(%{opcode: :close, code: code, data: reason}, socket) do
-    send_close(socket, code, reason)
-  end
-
-  defp handle_frame(%{opcode: opcode, data: payload}, _socket) when opcode in [:text, :binary] do
-    IO.puts("Received: #{payload}")
-  end
-
-  defp send_close(socket, code, reason) do
-    :gen_tcp.send(socket, WebSocket.Frame.encode(:close, {code, reason}))
+  defp handle_frame(%{opcode: :close, code: code}, acc, socket) do
+    :gen_tcp.send(socket, WebSocket.Frame.encode(:close, {code, ""}))
     :gen_tcp.close(socket)
+    {:halt, acc}
+  end
+
+  defp handle_frame(%{opcode: :pong}, acc, _) do
+    {:cont, acc}
+  end
+
+  defp handle_frame(%{fin?: true, opcode: :binary, data: data}, acc, _) do
+    {:cont, [data | acc]}
+  end
+
+  defp handle_frame(%{fin?: true, opcode: :text, data: data}, acc, _) do
+    # TODO: check for utf-8 validity
+    {:cont, [data | acc]}
+  end
+
+  defp handle_frame(%{fin?: false, opcode: :binary, data: data}, acc, _) do
+    {:cont, [data | acc]}
+  end
+
+  defp handle_frame(%{fin?: false, opcode: :text, data: data}, acc, _) do
+    {:cont, [data | acc]}
+  end
+
+  defp handle_frame(%{opcode: :continuation, data: data}, [head | rest], _) do
+    {:cont, [head <> data | rest]}
   end
 end

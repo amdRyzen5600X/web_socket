@@ -298,7 +298,7 @@ defmodule WebSocket.FrameTest do
 
     test "encodes binary frame" do
       data = <<1, 2, 3, 4, 5>>
-      assert <<0x82::8, 0x05::8, data::binary>> = Frame.encode(:binary, data)
+      assert <<0x82::8, 0x05::8, ^data::binary>> = Frame.encode(:binary, data)
     end
 
     test "encodes ping frame" do
@@ -431,7 +431,7 @@ defmodule WebSocket.FrameTest do
   describe "fragmentation - THESE TESTS SHOULD FAIL" do
     test "parses fragmented text message (3 fragments)" do
       fragment1 = <<0x01::8, 0x05::8, "Hello">>
-      fragment2 = <<0x00::8, 0x05::8, " ">>
+      fragment2 = <<0x00::8, 0x01::8, " ">>
       fragment3 = <<0x80::8, 0x06::8, "World!">>
 
       combined = fragment1 <> fragment2 <> fragment3
