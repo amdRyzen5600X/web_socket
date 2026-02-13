@@ -11,53 +11,69 @@ defmodule WebSocket.Connection do
             id: nil,
             joined_at: nil
 
-  def start(client_socket) do
-    GenServer.start(__MODULE__, client_socket)
+  def start(opts) do
+    GenServer.start(__MODULE__, opts)
   end
 
-  def init(client_socket) do
+  def init({client_socket, handler_module, peer, headers, path, query_params}) do
     :inet.setopts(client_socket, active: :once)
-    {:ok, %{socket: client_socket, state: :handshake, buffer: <<>>}}
+
+    {:ok,
+     %{
+       socket: client_socket,
+       state: :handshake,
+       handler_module: handler_module,
+       peer: peer,
+       headers: headers,
+       path: path,
+       query_params: query_params,
+       buffer: <<>>
+     }}
   end
 
-  def send_text(socket, text) do
-    frame = WebSocket.Frame.encode(:text, text)
-    :gen_tcp.send(socket, frame)
+  def send_text(%__MODULE__{transport_pid: pid}, text) do
+    GenServer.cast(pid, {:send, :text, text})
   end
 
-  def send_binary(socket, payload) do
-    frame = WebSocket.Frame.encode(:binary, payload)
-    :gen_tcp.send(socket, frame)
+  def send_binary(%__MODULE__{transport_pid: pid}, payload) do
+    GenServer.cast(pid, {:send, :binary, payload})
   end
 
-  def send_ping(socket) do
-    frame = WebSocket.Frame.encode(:ping, "")
-    :gen_tcp.send(socket, frame)
+  def close(%__MODULE__{transport_pid: pid}) do
+    GenServer.cast(pid, {:send, :close, {1000, "Normal Closure"}})
   end
 
-  def send_ping(socket, payload) do
-    frame = WebSocket.Frame.encode(:ping, payload)
-    :gen_tcp.send(socket, frame)
+  def close(%__MODULE__{transport_pid: pid}, {code, payload}) do
+    GenServer.cast(pid, {:send, :close, {code, payload}})
   end
 
-  def close(socket) do
-    frame = WebSocket.Frame.encode(:close, {1000, "Normal Closure"})
-    :gen_tcp.send(socket, frame)
+  def handle_cast({:send, opcode, payload}, state) do
+    frame = WebSocket.Frame.encode(opcode, payload)
+    :gen_tcp.send(state.socket, frame)
+    {:noreply, state}
   end
 
-  def close(socket, {code, payload}) do
-    frame = WebSocket.Frame.encode(:close, {code, payload})
-    :gen_tcp.send(socket, frame)
-  end
-
-  def handle_info({:tcp, socket, data}, state = %{state: :handshake, buffer: buff}) do
+  def handle_info(
+        {:tcp, socket, data},
+        state = %{state: :handshake, buffer: buff, handler_module: handler_module}
+      ) do
     case WebSocket.Handshake.parse(data, buff) do
       {:ok, handshake, rest} ->
         case WebSocket.Handshake.accept_response(handshake) do
           {:ok, response} ->
+            connection = %__MODULE__{socket: socket, transport_pid: self()}
+            {:ok, handler_state} = handler_module.init(connection, %{})
             :gen_tcp.send(socket, response)
             :inet.setopts(socket, active: :once)
-            {:noreply, %{state | state: :open, buffer: rest}}
+
+            {:noreply,
+             %{
+               state
+               | state: :open,
+                 buffer: rest,
+                 connection: connection,
+                 handler_state: handler_state
+             }}
 
           {:error, reason, response} ->
             :gen_tcp.send(socket, response)
