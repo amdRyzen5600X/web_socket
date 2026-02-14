@@ -47,6 +47,13 @@ defmodule WebSocket.Connection do
     GenServer.cast(pid, {:send, :close, {code, payload}})
   end
 
+  def handle_cast({:send, :close, {_code, reason} = payload}, state) do
+    frame = WebSocket.Frame.encode(:close, payload)
+    :gen_tcp.send(state.socket, frame)
+    :gen_tcp.close(state.socket)
+    {:stop, reason, state}
+  end
+
   def handle_cast({:send, opcode, payload}, state) do
     frame = WebSocket.Frame.encode(opcode, payload)
     :gen_tcp.send(state.socket, frame)
@@ -93,10 +100,29 @@ defmodule WebSocket.Connection do
     end
   end
 
-  def handle_info({:tcp, socket, data}, %{state: :open, buffer: buffer} = state) do
+  def handle_info(
+        {:tcp, socket, data},
+        %{
+          state: :open,
+          buffer: buffer,
+          handler_module: handler_module,
+          connection: connection,
+          handler_state: handler_state
+        } =
+          state
+      ) do
     case WebSocket.Frame.parse(data, buffer) do
       {:ok, frames, rest} ->
-        Enum.reduce_while(frames, [], &handle_frame(&1, &2, socket))
+        frames
+        |> Enum.reduce_while([], &handle_raw_frame(&1, &2, socket))
+        |> Enum.reduce_while(state, fn frame, current_state ->
+          handle_frame(
+            frame,
+            handler_module,
+            current_state.connection,
+            current_state.handler_state
+          )
+        end)
 
         :inet.setopts(socket, active: :once)
         {:noreply, %{state | buffer: rest}}
@@ -112,7 +138,12 @@ defmodule WebSocket.Connection do
     end
   end
 
-  def handle_info({:tcp_closed, _socket}, state) do
+  def handle_info(
+        {:tcp_closed, _socket},
+        %{handler_module: handler_module, connection: connection, handler_state: handler_state} =
+          state
+      ) do
+    handler_module.terminate(connection, {1000, "Normal Closure"}, handler_state)
     {:stop, :normal, state}
   end
 
@@ -120,39 +151,77 @@ defmodule WebSocket.Connection do
     {:stop, {:error, reason}, state}
   end
 
-  defp handle_frame(%{opcode: :ping, data: data}, acc, socket) do
+  defp handle_frame({:text, frame_payload}, handler_module, socket, state) do
+    case handler_module.handle_text(socket, frame_payload, state) do
+      {:noreply, new_state} ->
+        {:cont, new_state}
+
+      {:reply, response_frame, new_state} ->
+        send_text(socket, response_frame)
+        {:cont, new_state}
+
+      {:close, new_state} ->
+        close(socket)
+        {:halt, new_state}
+
+      {:close, {code, reason}, new_state} ->
+        close(socket, {code, reason})
+        {:halt, new_state}
+    end
+  end
+
+  defp handle_frame({:binary, frame_payload}, handler_module, socket, state) do
+    case handler_module.handle_binary(socket, frame_payload, state) do
+      {:noreply, new_state} ->
+        {:cont, new_state}
+
+      {:reply, response_frame, new_state} ->
+        send_binary(socket, response_frame)
+        {:cont, new_state}
+
+      {:close, new_state} ->
+        close(socket)
+        {:halt, new_state}
+
+      {:close, {code, reason}, new_state} ->
+        close(socket, {code, reason})
+        {:halt, new_state}
+    end
+  end
+
+  defp handle_raw_frame(%{opcode: :ping, data: data}, acc, socket) do
     :gen_tcp.send(socket, WebSocket.Frame.encode(:pong, data))
     {:cont, acc}
   end
 
-  defp handle_frame(%{opcode: :close, code: code}, acc, socket) do
+  defp handle_raw_frame(%{opcode: :close, code: code}, acc, socket) do
     :gen_tcp.send(socket, WebSocket.Frame.encode(:close, {code, ""}))
     :gen_tcp.close(socket)
     {:halt, acc}
   end
 
-  defp handle_frame(%{opcode: :pong}, acc, _) do
+  defp handle_raw_frame(%{opcode: :pong}, acc, _) do
     {:cont, acc}
   end
 
-  defp handle_frame(%{fin?: true, opcode: :binary, data: data}, acc, _) do
-    {:cont, [data | acc]}
+  defp handle_raw_frame(%{fin?: true, opcode: :binary, data: data}, acc, _) do
+    {:cont, [{:binary, data} | acc]}
   end
 
-  defp handle_frame(%{fin?: true, opcode: :text, data: data}, acc, _) do
+  defp handle_raw_frame(%{fin?: true, opcode: :text, data: data}, acc, _) do
     # TODO: check for utf-8 validity
-    {:cont, [data | acc]}
+    {:cont, [{:text, data} | acc]}
   end
 
-  defp handle_frame(%{fin?: false, opcode: :binary, data: data}, acc, _) do
-    {:cont, [data | acc]}
+  defp handle_raw_frame(%{fin?: false, opcode: :binary, data: data}, acc, _) do
+    {:cont, [{:binary, data} | acc]}
   end
 
-  defp handle_frame(%{fin?: false, opcode: :text, data: data}, acc, _) do
-    {:cont, [data | acc]}
+  defp handle_raw_frame(%{fin?: false, opcode: :text, data: data}, acc, _) do
+    {:cont, [{:text, data} | acc]}
   end
 
-  defp handle_frame(%{opcode: :continuation, data: data}, [head | rest], _) do
-    {:cont, [head <> data | rest]}
+  defp handle_raw_frame(%{opcode: :continuation, data: data}, [{opcode, head} | rest], _) do
+    {:cont, [{opcode, head <> data} | rest]}
   end
 end
