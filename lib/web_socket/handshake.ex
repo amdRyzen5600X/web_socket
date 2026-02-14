@@ -1,4 +1,3 @@
-# TODO: envoke a user provided before_connection(headers) callback before accepting the connection
 defmodule WebSocket.Handshake do
   def parse(data, buff) do
     data_to_parse = buff <> data
@@ -17,7 +16,7 @@ defmodule WebSocket.Handshake do
 
   defp parse_request_line(input) do
     case String.split(input, " ", parts: 2) do
-      ["GET", rest] when rest != [] ->
+      ["GET", rest] ->
         parse_path(rest)
 
       [_, _] ->
@@ -30,12 +29,9 @@ defmodule WebSocket.Handshake do
 
   defp parse_path(input) do
     case String.split(input, " ", parts: 2) do
-      ["/" <> _ = path, rest] when rest != [] ->
+      ["/" <> _ = path, rest] ->
         handshake = Map.put(%{}, "path", [path])
         parse_http(rest, handshake)
-
-      ["/" <> _, _] ->
-        {:error, :invalid_path}
 
       ["/" <> _] ->
         :more
@@ -50,7 +46,7 @@ defmodule WebSocket.Handshake do
 
   defp parse_http(input, handshake) do
     case String.split(input, "\r\n", parts: 2) do
-      ["HTTP/1.1", rest] when rest != [] ->
+      ["HTTP/1.1", rest] ->
         parse_headers(rest, handshake)
 
       [_, _] ->
@@ -66,7 +62,7 @@ defmodule WebSocket.Handshake do
       ["", rest] ->
         {:ok, handshake, rest}
 
-      [header, rest] when rest != [] ->
+      [header, rest] ->
         case parse_header(header) do
           {:ok, key, values} ->
             {_, handshake} =
@@ -167,7 +163,7 @@ defmodule WebSocket.Handshake do
     end
   end
 
-  defp validate(%{"sec-websocket-key" => [head | _]} = handshake) when head != [] do
+  defp validate(%{"sec-websocket-key" => [head | _]} = handshake) when head != "" do
     handshake
     |> Map.put("sec-elixir-custom-key", [head])
     |> Map.put("sec-websocket-key", :ok)
