@@ -1,5 +1,79 @@
 defmodule WebSocket.Connection do
+  @moduledoc """
+  GenServer-based WebSocket connection manager.
+
+  This module manages the lifecycle of an individual WebSocket connection.
+  It handles the handshake, frame parsing, and message routing to handler
+  callbacks.
+
+  ## Usage
+
+  Connections are started automatically by `WebSocket.Listener`. You typically
+  don't need to start them manually, but you can:
+
+  ```elixir
+  {:ok, client_socket} = :gen_tcp.connect("localhost", 8080, [])
+  {:ok, pid} = WebSocket.Connection.start({client_socket, MyHandler, nil, nil, nil, nil})
+  ```
+
+  ## Sending Messages
+
+  Use the following functions to send messages to the client:
+
+  ```elixir
+  # Send text
+  WebSocket.Connection.send_text(socket, "Hello!")
+
+  # Send binary
+  WebSocket.Connection.send_binary(socket, <<1, 2, 3>>)
+
+  # Close connection
+  WebSocket.Connection.close(socket)
+  ```
+
+  ## State Machine
+
+  The connection goes through these states:
+
+  1. `:handshake` - Waiting for HTTP upgrade request
+  2. `:open` - Connection established, exchanging frames
+  3. `:closed` - Connection terminated
+
+  ## Control Frames
+
+  The following control frames are handled automatically:
+
+  - **Ping**: Automatically responded to with a pong frame
+  - **Pong**: Silently acknowledged
+  - **Close**: Connection is terminated after sending close response
+  """
+
   use GenServer
+
+  @doc """
+  The connection struct containing metadata about a WebSocket connection.
+
+  - `:socket` - The underlying TCP socket
+  - `:transport_pid` - The GenServer PID managing this connection
+  - `:peer` - Peer address information
+  - `:path` - Request path from handshake
+  - `:query_params` - Parsed query string parameters
+  - `:assigns` - User-assigned data (similar to Phoenix assigns)
+  - `:private` - Private data for internal use
+  - `:id` - Unique connection identifier
+  - `:joined_at` - Timestamp of connection establishment
+  """
+  @type t :: %__MODULE__{
+          socket: port() | nil,
+          transport_pid: pid() | nil,
+          peer: term() | nil,
+          path: String.t(),
+          query_params: map(),
+          assigns: term() | nil,
+          private: term() | nil,
+          id: term() | nil,
+          joined_at: term() | nil
+        }
 
   defstruct socket: nil,
             transport_pid: nil,
@@ -11,10 +85,28 @@ defmodule WebSocket.Connection do
             id: nil,
             joined_at: nil
 
+  @doc """
+  Starts a new WebSocket connection GenServer.
+
+  ## Parameters
+
+  - `opts` - A tuple containing:
+    - `client_socket` - The accepted TCP socket
+    - `handler_module` - Module implementing `WebSocket.Handler`
+    - `peer` - Peer address (currently unused)
+    - `headers` - HTTP headers (currently unused)
+    - `path` - Request path (currently unused)
+    - `query_params` - Query parameters (currently unused)
+
+  ## Returns
+
+  `{:ok, pid}` on success
+  """
   def start(opts) do
     GenServer.start(__MODULE__, opts)
   end
 
+  @doc false
   def init({client_socket, handler_module, peer, headers, path, query_params}) do
     :inet.setopts(client_socket, active: :once)
 
@@ -31,18 +123,85 @@ defmodule WebSocket.Connection do
      }}
   end
 
+  @doc """
+  Sends a text frame to the WebSocket client.
+
+  ## Parameters
+
+  - `socket` - The connection struct
+  - `text` - The text message to send (must be UTF-8 valid)
+
+  ## Example
+
+  ```elixir
+  WebSocket.Connection.send_text(socket, "Hello, client!")
+  ```
+  """
   def send_text(%__MODULE__{transport_pid: pid}, text) do
     GenServer.cast(pid, {:send, :text, text})
   end
 
+  @doc """
+  Sends a binary frame to the WebSocket client.
+
+  ## Parameters
+
+  - `socket` - The connection struct
+  - `payload` - Binary data to send
+
+  ## Example
+
+  ```elixir
+  WebSocket.Connection.send_binary(socket, <<1, 2, 3, 4>>)
+  ```
+  """
   def send_binary(%__MODULE__{transport_pid: pid}, payload) do
     GenServer.cast(pid, {:send, :binary, payload})
   end
 
+  @doc """
+  Closes the WebSocket connection with the default close code (1000).
+
+  ## Parameters
+
+  - `socket` - The connection struct
+
+  ## Example
+
+  ```elixir
+  WebSocket.Connection.close(socket)
+  ```
+  """
   def close(%__MODULE__{transport_pid: pid}) do
     GenServer.cast(pid, {:send, :close, {1000, "Normal Closure"}})
   end
 
+  @doc """
+  Closes the WebSocket connection with a custom close code and reason.
+
+  ## Parameters
+
+  - `socket` - The connection struct
+  - `{code, payload}` - A tuple containing:
+    - `code` - Close code (see RFC 6455 section 7.1.5)
+    - `payload` - Close reason string (max 123 bytes)
+
+  ## Common Close Codes
+
+  - 1000 - Normal Closure
+  - 1001 - Going Away
+  - 1002 - Protocol Error
+  - 1003 - Unsupported Data
+  - 1008 - Policy Violation
+  - 1009 - Message Too Big
+  - 1011 - Internal Error
+
+  ## Example
+
+  ```elixir
+  WebSocket.Connection.close(socket, {1001, "Server shutting down"})
+  ```
+  """
   def close(%__MODULE__{transport_pid: pid}, {code, payload}) do
     GenServer.cast(pid, {:send, :close, {code, payload}})
   end

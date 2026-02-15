@@ -1,4 +1,65 @@
 defmodule WebSocket.Handshake do
+  @moduledoc """
+  HTTP WebSocket handshake parser and validator.
+
+  This module handles the HTTP upgrade request from the client, validates
+  required headers, and generates the appropriate response.
+
+  ## Handshake Process
+
+  1. Parse HTTP request line (GET /path HTTP/1.1)
+  2. Parse HTTP headers
+  3. Validate required WebSocket headers:
+     - `Upgrade: websocket`
+     - `Connection: Upgrade`
+     - `Sec-WebSocket-Key: <base64>`
+     - `Sec-WebSocket-Version: 13`
+  4. Generate response with `Sec-WebSocket-Accept` header
+
+  ## Example
+
+  ```elixir
+  handshake_request = "GET /chat HTTP/1.1\\r\\n" <>
+    "Host: localhost:8080\\r\\n" <>
+    "Upgrade: websocket\\r\\n" <>
+    "Connection: Upgrade\\r\\n" <>
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\n" <>
+    "Sec-WebSocket-Version: 13\\r\\n" <>
+    "\\r\\n"
+
+  case WebSocket.Handshake.parse(handshake_request, <<>>) do
+    {:ok, handshake_data, ""} ->
+      {:ok, response} = WebSocket.Handshake.accept_response(handshake_data)
+      # Send response to client
+
+    {:error, reason} ->
+      # Handle error
+  end
+  ```
+  """
+
+  @doc """
+  Parses an HTTP WebSocket handshake request.
+
+  ## Parameters
+
+  - `data` - Incoming TCP data
+  - `buff` - Previously buffered data
+
+  ## Returns
+
+  - `{:ok, handshake, rest}` - Successfully parsed handshake with remaining data
+  - `{:more, buffer}` - Incomplete request, data buffered
+  - `{:error, reason}` - Invalid request
+
+  ## Example
+
+  ```elixir
+  {:ok, handshake, ""} = WebSocket.Handshake.parse(request, <<>>)
+  handshake["path"] #=> ["/chat"]
+  handshake["host"] #=> ["localhost:8080"]
+  ```
+  """
   def parse(data, buff) do
     data_to_parse = buff <> data
 
@@ -104,7 +165,25 @@ defmodule WebSocket.Handshake do
     end
   end
 
-  # TODO: parse the "path" value from the map, end ensure the validity of the value
+  @doc """
+  Validates the handshake and generates an HTTP response.
+
+  ## Parameters
+
+  - `handshake` - Parsed handshake data map
+
+  ## Returns
+
+  - `{:ok, response}` - HTTP 101 response with WebSocket accept key
+  - `{:error, reason, response}` - HTTP error response
+
+  ## Example
+
+  ```elixir
+  {:ok, response} = WebSocket.Handshake.accept_response(handshake)
+  # response: "HTTP/1.1 101 Switching Protocols\\r\\n..."
+  ```
+  """
   def accept_response(handshake) do
     validate_result = validate(handshake)
 
@@ -219,6 +298,28 @@ defmodule WebSocket.Handshake do
     {:ok, response}
   end
 
+  @doc """
+  Generates an HTTP error response for failed handshakes.
+
+  ## Parameters
+
+  - `reason` - Atom indicating the failure reason
+
+  ## Returns
+
+  `{:error, reason, response}` - Error tuple with HTTP response
+
+  ## Error Responses
+
+  - `:invalid_path` - HTTP 404 Not Found
+  - `:invalid_method` - HTTP 400 Bad Request
+  - `:invalid_http_version` - HTTP 400 Bad Request
+  - `:invalid_header_upgrade` - HTTP 400 Bad Request
+  - `:invalid_header_connection` - HTTP 400 Bad Request
+  - `:invalid_header_sec_ws_key` - HTTP 400 Bad Request
+  - `:invalid_header_sec_ws_version` - HTTP 400 Bad Request
+  - `:invalid_header_not_enough` - HTTP 400 Bad Request
+  """
   def reject(:invalid_path) do
     response =
       "HTTP/1.1 404 Not Found\r\n" <>
